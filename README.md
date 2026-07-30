@@ -34,6 +34,21 @@ What has changed from Ramulator 2.0:
 - Significantly improved the ease of use, configuration, and extension
 - Overall code quality improvements
 
+If you use Ramulator 2.1/2.0 in your work, please use the following citations:
+```
+@misc{luo2026ramulator2.1,
+	title        = {{Ramulator 2.1: A Composable Memory System Simulator for Modern DRAM Systems}},
+	author       = {Luo, Haocong and Bostanc{\i}, F. Nisa and Olgun, Ataberk and Makeenkova, Maria and Malik, Ziad and Akdeniz, Ipek and Mutlu, Onur},
+	year         = 2026,
+	howpublished = {The 3rd Tutorial on Ramulator and DRAM Bender colocated with ICS}
+}
+@article{luo2024ramulator2.0,
+	title   = {{Ramulator 2.0: A Modern, Modular, and Extensible DRAM Simulator}},
+	author  = {Luo, Haocong and Tu{\u{g}}rul, Yahya Can and Bostanc{\i}, F. Nisa and Olgun, Ataberk and Ya{\u{g}}l{\i}k{\c{c}}{\i}, A. Giray and Mutlu, Onur},
+	year    = 2024,
+	journal = {IEEE Computer Architecture Letters}
+}
+```
 ### 1.2 Repository Layout
 
 - `src/`
