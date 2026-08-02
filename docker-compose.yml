@@ -20,7 +20,13 @@ services:
       - .:/workspace:cached
     working_dir: /workspace
     user: vscode
-    command: bash -c "bash .devcontainer/post-create.sh && sleep infinity"
+    command: bash -c "rm -f /tmp/ramulator2-ready && bash .devcontainer/post-create.sh && touch /tmp/ramulator2-ready && sleep infinity"
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ramulator2-ready"]
+      interval: 2s
+      timeout: 1s
+      retries: 300
+      start_period: 5s
 
   visualizer:
     profiles: [visualizer]

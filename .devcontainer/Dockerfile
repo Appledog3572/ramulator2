@@ -45,4 +45,4 @@ RUN existing_user=$(getent passwd "${USER_UID}" | cut -d: -f1 || true) \
        fi \
     && echo "${USERNAME} ALL=(root) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}" \
     && chmod 0440 "/etc/sudoers.d/${USERNAME}" \
-    && echo '[ -n "$VIRTUAL_ENV" ] && . "$VIRTUAL_ENV/bin/activate"' >> /home/${USERNAME}/.bashrc
+    && echo 'if [ -n "${VIRTUAL_ENV:-}" ] && [ -f "$VIRTUAL_ENV/bin/activate" ]; then . "$VIRTUAL_ENV/bin/activate"; fi' >> /home/${USERNAME}/.bashrc

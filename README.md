@@ -70,7 +70,7 @@ We highly recommend to use our container (Dockerfile available at `.devcontainer
 
 If you want to set up the container locally, you can do the following steps:
 ```bash
-docker compose up -d --build
+docker compose up -d --build --wait
 docker compose exec ramulator2 bash
 ```
 Doing so creates a container with all the dependencies, mounts the Ramulator 2.1 repository at `/workspace`, and automatically activates `ramulator2-venv` in the container bash.
