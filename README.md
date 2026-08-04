@@ -155,6 +155,14 @@ After building, install the Python package in editable mode so that `python -m r
 pip install -e .
 ```
 
+If you encounter issues installing the Python package, please create a virtual environment first, activate the venv, and then install again
+
+```bash
+python3 -m venv ramulator2-venv
+source ramulator2-venv/bin/activate
+```
+
+
 Then run examples directly:
 
 ```bash
