@@ -1,0 +1,36 @@
+# r2_data_layer_config.yaml — Step 1 DataLayer 測試用組態
+#
+# 選擇 DDR4-2400R 單通道作為基線，關閉 Refresh（NoRefresh）
+# 讓測試過程只看到讀寫時序，不受 refresh 干擾。
+#
+# controller_plugin 列表中加入 DataLayer，debug=true 方便觀察。
+
+memory_system:
+  impl: GenericDRAM
+  clock_ratio: 3
+  channel_mapper:
+    impl: PassThroughChannelMapper
+  controller:
+    impl: GenericDDR
+    dram:
+      impl: DDR4
+      org:
+        preset: DDR4_8Gb_x8
+        rank: 1
+      timing:
+        preset: DDR4_2400R
+    scheduler:
+      impl: FRFCFS
+    refresh_manager:
+      impl: NoRefresh
+    row_policy:
+      impl: Open
+    addr_mapper:
+      impl: RoBaRaCoCh
+    controller_plugin:
+      - impl: DataLayer
+        page_size: 4096
+        debug: true
+
+frontend:
+  impl: NullFrontend

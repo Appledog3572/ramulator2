@@ -50,6 +50,8 @@ target_sources(
   plugin/impl/bin_trace_recorder.cpp
   plugin/impl/live_trace_streamer.cpp
 
+  plugin/impl/data_layer.cpp
+
   impl/generic_ddr_controller.cpp
   impl/lpddr_controller_base.h
   impl/lpddr_controller_base.cpp
