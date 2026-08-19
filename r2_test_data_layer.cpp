@@ -57,11 +57,13 @@ static void check(bool cond, const char* msg) {
 }
 
 // 送出 Write request 並等 callback（同步 tick loop）
+// PassThroughChannelMapper 不會填 addr_vec，須手動設 addr_vec[0]=0（channel 0）
 static void do_write(IMemorySystem* mem, uint64_t addr, int tx_bytes) {
   bool done = false;
   Request req(addr, Request::Type::Write, 0,
                [&done](Request&) { done = true; });
-  req.size_bytes = tx_bytes;
+  req.size_bytes  = tx_bytes;
+  req.addr_vec    = {0};   // PassThrough 不填；預設單通道 = ch 0
   while (!mem->send(req)) mem->tick();
   while (!done)           mem->tick();
 }
@@ -73,6 +75,7 @@ static Clk_t do_read(IMemorySystem* mem, uint64_t addr, int tx_bytes) {
   Request req(addr, Request::Type::Read, 0,
                [&](Request& r) { done = true; depart = r.depart; });
   req.size_bytes = tx_bytes;
+  req.addr_vec   = {0};   // 同上
   while (!mem->send(req)) mem->tick();
   while (!done)           mem->tick();
   return depart;
@@ -86,7 +89,7 @@ int main(int argc, char* argv[]) {
   printf("config: %s\n\n", cfg_path);
 
   // 1. 建立 Ramulator2 記憶體系統
-  auto config       = Config::parse_config_file(cfg_path, {});
+  auto config       = Config::parse_config_file(cfg_path);
   IFrontEnd*     fe = Factory::create_frontend(config);
   IMemorySystem* mem= Factory::create_memory_system(config);
 

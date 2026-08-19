@@ -16,8 +16,15 @@ SRC="$SCRIPT_DIR/r2_test_data_layer.cpp"
 OUT="$BIN_DIR/test_data_layer"
 CONFIG="$SCRIPT_DIR/r2_data_layer_config.yaml"
 
+# ── 步驟 0：從 Python config script export YAML ──────────────────────────────
+echo "=== [0/3] export r2_data_layer_config.yaml ==="
+PYTHONPATH="$SCRIPT_DIR/python" python3 -m ramulator export \
+    "$SCRIPT_DIR/r2_data_layer_config.py" \
+    -o "$CONFIG"
+
 # ── 步驟 1：cmake build（可跳過） ───────────────────────────────────────────
 if [[ "${1:-}" != "--no-cmake" ]]; then
+  echo ""
   echo "=== [1/3] cmake build libramulator ==="
   cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
   cmake --build "$BUILD_DIR" --parallel "$(nproc 2>/dev/null || echo 4)"
@@ -35,8 +42,8 @@ g++ -std=c++20 -O2 \
     -I "$SCRIPT_DIR/ext/yaml-cpp/include" \
     -I "$SCRIPT_DIR/ext/spdlog/include" \
     "$SRC" \
-    -L "$BUILD_DIR" -lramulator \
-    -Wl,-rpath,"$BUILD_DIR" \
+    -L "$SCRIPT_DIR" -lramulator \
+    -Wl,-rpath,"$SCRIPT_DIR" \
     -o "$OUT"
 
 echo "  → $OUT"
