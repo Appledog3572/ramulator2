@@ -33,13 +33,15 @@ void RamulatorRAM::do_write(uint64_t addr) {
 Clk_t RamulatorRAM::do_read(uint64_t addr) {
     bool  done   = false;
     Clk_t depart = -1;
+    Clk_t arrive = -1;
     Request req(addr, Request::Type::Read, 0,
-                [&](Request& r) { done = true; depart = r.depart; });
+                [&](Request& r) { done = true; depart = r.depart; arrive = r.arrive; });
     req.size_bytes = tx_bytes_;
     req.addr_vec   = {0};
     while (!mem_->send(req)) mem_->tick();
     while (!done)            mem_->tick();
-    return depart;
+    // 回傳實際延遲（cycles），而非絕對 depart cycle
+    return (arrive >= 0) ? (depart - arrive) : depart;
 }
 
 // ── IRAM 介面實作 ─────────────────────────────────────────────────────────────
