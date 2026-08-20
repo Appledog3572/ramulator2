@@ -46,6 +46,13 @@ public:
     uint64_t      allocate(double current_time) override;
     void          free_page(uint64_t page_id)   override;
 
+    // ── IRAM 擴充（GuardedRAM / FaultInjector 使用）──────────────────
+    // DataLayer 有此頁資料 → 視為 in RAM
+    bool is_in_ram(uint64_t page_id) const override;
+    // 隨機翻一個 bit（透過 DataLayer API）
+    void inject_random_flip(uint64_t page_id) override;
+    // inject_row_error / inject_column_error 用 IRAM 預設空實作
+
     // ── 查詢 ──────────────────────────────────────────────────────
     float    tCK_ns()    const { return tCK_ns_; }
     int      tx_bytes()  const { return tx_bytes_; }

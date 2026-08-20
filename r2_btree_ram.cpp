@@ -90,4 +90,12 @@ void RamulatorRAM::free_page(uint64_t page_id) {
     dl_erase(page_addr(page_id));
 }
 
+bool RamulatorRAM::is_in_ram(uint64_t page_id) const {
+    return dl_has_page(page_addr(page_id));
+}
+
+void RamulatorRAM::inject_random_flip(uint64_t page_id) {
+    dl_random_flip(page_addr(page_id));
+}
+
 }  // namespace Ramulator
