@@ -18,10 +18,15 @@
 
 #pragma once
 #include <cstdint>
+#include <list>
+#include <unordered_map>
 #include <vector>
 
 // V2 抽象介面（IRAM + RAMReadResult / DRAMAddress）
 #include "new_RAM_core/new_ram.hpp"
+
+// 前置宣告（避免在 hpp 拉入整個 SSD 標頭）
+class SSD;
 
 // Ramulator2
 #include "ramulator/base/base.h"
@@ -36,7 +41,12 @@ class RamulatorRAM : public IRAM {
 public:
     // mem 必須已完成 connect_frontend() / connect_memory_system()
     // 對應 YAML 中需同時載入 DataLayer + ECC plugin
-    explicit RamulatorRAM(IMemorySystem* mem);
+    //
+    // ssd（可 nullptr）: write-through 後端 + crash_rescue 乾淨副本來源。
+    // capacity_pages（0 = 無上限）: DataLayer 頁數上限；超過時 LRU 逐出到 SSD。
+    explicit RamulatorRAM(IMemorySystem* mem,
+                          SSD*     ssd            = nullptr,
+                          uint64_t capacity_pages = 0);
 
     // ── IRAM 介面 ─────────────────────────────────────────────────
     RAMReadResult read(uint64_t page_id, double current_time) override;
@@ -64,6 +74,14 @@ private:
     int      tx_bytes_;
     uint64_t next_page_id_ = 0;
 
+    // SSD 後端（可 nullptr）
+    SSD*     ssd_            = nullptr;
+    uint64_t capacity_pages_ = 0;   // 0 = 無上限
+
+    // LRU 追蹤（僅 ssd_ != nullptr 且 capacity_pages_ > 0 時有效）
+    std::list<uint64_t>                                        lru_order_;
+    std::unordered_map<uint64_t, std::list<uint64_t>::iterator> lru_map_;
+
     static constexpr uint32_t PAGE_SIZE = 4096;
 
     uint64_t page_addr(uint64_t page_id) const {
@@ -72,8 +90,13 @@ private:
 
     // 同步 Write：送 request 並等待 callback
     void   do_write(uint64_t addr);
-    // 同步 Read：送 request 並等待 callback，回傳 depart cycle
+    // 同步 Read：送 request 並等待 callback，回傳 depart−arrive cycles
     Clk_t  do_read (uint64_t addr);
+
+    // LRU 輔助
+    void lru_touch (uint64_t page_id);
+    void lru_remove(uint64_t page_id);
+    void maybe_evict();   // 若超過 capacity_pages_ 則踢出 LRU 頁到 SSD
 };
 
 }  // namespace Ramulator
