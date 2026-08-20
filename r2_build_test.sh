@@ -41,6 +41,13 @@ if [[ -z "$ONLY" || "$ONLY" == "bf" ]]; then
       -o "$SCRIPT_DIR/r2_bit_flip_config.yaml"
 fi
 
+if [[ -z "$ONLY" || "$ONLY" == "ecc" ]]; then
+  echo "=== [0] export r2_ecc_config.yaml ==="
+  PYTHONPATH="$SCRIPT_DIR/python" python3 -m ramulator export \
+      "$SCRIPT_DIR/r2_ecc_config.py" \
+      -o "$SCRIPT_DIR/r2_ecc_config.yaml"
+fi
+
 # ── 步驟 1：cmake build ───────────────────────────────────────────────────────
 if [[ $NO_CMAKE -eq 0 ]]; then
   echo ""
@@ -79,6 +86,17 @@ if [[ -z "$ONLY" || "$ONLY" == "bf" ]]; then
   echo "  → $BIN_DIR/test_bit_flip"
 fi
 
+# ── 步驟 2c：編譯 ECC 測試 ───────────────────────────────────────────────────
+if [[ -z "$ONLY" || "$ONLY" == "ecc" ]]; then
+  echo ""
+  echo "=== [2c] 編譯 r2_test_ecc.cpp ==="
+  g++ $CXXFLAGS $INCLUDES \
+      "$SCRIPT_DIR/r2_test_ecc.cpp" \
+      $LDFLAGS \
+      -o "$BIN_DIR/test_ecc"
+  echo "  → $BIN_DIR/test_ecc"
+fi
+
 # ── 步驟 3：執行測試 ──────────────────────────────────────────────────────────
 cd "$SCRIPT_DIR"
 OVERALL=0
@@ -93,6 +111,12 @@ if [[ -z "$ONLY" || "$ONLY" == "bf" ]]; then
   echo ""
   echo "=== [3b] BitFlip 測試 ==="
   "$BIN_DIR/test_bit_flip" "$SCRIPT_DIR/r2_bit_flip_config.yaml" || OVERALL=1
+fi
+
+if [[ -z "$ONLY" || "$ONLY" == "ecc" ]]; then
+  echo ""
+  echo "=== [3c] ECC 測試 ==="
+  "$BIN_DIR/test_ecc" "$SCRIPT_DIR/r2_ecc_config.yaml" || OVERALL=1
 fi
 
 echo ""

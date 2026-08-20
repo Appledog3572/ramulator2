@@ -52,6 +52,7 @@ target_sources(
 
   plugin/impl/data_layer.cpp
   plugin/impl/bit_flip.cpp
+  plugin/impl/ecc_plugin.cpp
 
   impl/generic_ddr_controller.cpp
   impl/lpddr_controller_base.h
