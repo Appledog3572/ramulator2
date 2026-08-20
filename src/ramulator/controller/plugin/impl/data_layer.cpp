@@ -70,6 +70,30 @@ class DataLayerPlugin : public IControllerPlugin, public Implementation {
 
   size_t page_count() const { return m_pages.size(); }
 
+  // 指定位置翻轉一個 bit（byte_pos 在頁面內，bit_pos ∈ 0–7）
+  void flip_bit(uint64_t addr, int byte_pos, int bit_pos) {
+    auto it = m_pages.find(addr);
+    if (it == m_pages.end())
+      throw std::runtime_error("DataLayer: flip_bit() addr not found");
+    it->second[byte_pos] ^= static_cast<uint8_t>(1u << bit_pos);
+  }
+
+  // 以 rand_val 選出隨機頁面的隨機 bit 並翻轉，回傳被翻轉的頁面位址
+  // 若目前沒有任何頁面則回傳 UINT64_MAX
+  uint64_t random_flip(uint64_t rand_val) {
+    if (m_pages.empty()) return UINT64_MAX;
+    // 用 rand_val 低位選頁面 index
+    size_t page_idx = static_cast<size_t>(rand_val) % m_pages.size();
+    auto it = m_pages.begin();
+    std::advance(it, page_idx);
+    auto& page = it->second;
+    // 用 rand_val 高位選 bit 位置
+    size_t total_bits = page.size() * 8ULL;
+    size_t bit_idx = static_cast<size_t>(rand_val >> 32) % total_bits;
+    page[bit_idx / 8] ^= static_cast<uint8_t>(1u << (bit_idx % 8));
+    return it->first;
+  }
+
   // ── Ramulator2 lifecycle ─────────────────────────────────────────────────
 
   void init() override {
@@ -133,6 +157,14 @@ void dl_erase(uint64_t page_addr) {
 
 size_t dl_page_count() {
   return DataLayerPlugin::instance()->page_count();
+}
+
+void dl_flip_bit(uint64_t page_addr, int byte_pos, int bit_pos) {
+  DataLayerPlugin::instance()->flip_bit(page_addr, byte_pos, bit_pos);
+}
+
+uint64_t dl_random_flip(uint64_t rand_val) {
+  return DataLayerPlugin::instance()->random_flip(rand_val);
 }
 
 }  // namespace Ramulator

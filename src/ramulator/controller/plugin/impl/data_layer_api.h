@@ -34,4 +34,12 @@ void dl_erase(uint64_t page_addr);
 // 目前儲存的頁面數量
 size_t dl_page_count();
 
+// 翻轉指定頁面的特定 bit（byte_pos ∈ [0, PAGE_SIZE)，bit_pos ∈ [0, 7]）
+// 若 page_addr 不存在則拋出 std::runtime_error
+void dl_flip_bit(uint64_t page_addr, int byte_pos, int bit_pos);
+
+// 以 rand_val 隨機選一頁面的隨機 bit 翻轉，回傳被選中的頁面位址
+// 若目前沒有任何頁面則回傳 UINT64_MAX
+uint64_t dl_random_flip(uint64_t rand_val);
+
 }  // namespace Ramulator
