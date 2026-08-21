@@ -8,17 +8,20 @@ namespace Ramulator {
 
 // ── 建構 ─────────────────────────────────────────────────────────────────────
 
-RamulatorRAM::RamulatorRAM(IMemorySystem* mem, SSD* ssd, uint64_t capacity_pages)
+RamulatorRAM::RamulatorRAM(IMemorySystem* mem, SSD* ssd, uint64_t capacity_pages,
+                           bool use_ecc)
     : mem_(mem),
       tCK_ns_(mem->get_tCK()),
       tx_bytes_(mem->get_tx_bytes()),
+      use_ecc_(use_ecc),
+      rng_(reinterpret_cast<uintptr_t>(mem) ^ 0xdeadbeef9876543ull),
       ssd_(ssd),
       capacity_pages_(capacity_pages)
 {
-    if (!ecc_is_ready())
-        throw std::runtime_error("RamulatorRAM: ECC plugin not ready (check YAML config)");
     if (!dl_is_ready())
         throw std::runtime_error("RamulatorRAM: DataLayer plugin not ready (check YAML config)");
+    if (use_ecc_ && !ecc_is_ready())
+        throw std::runtime_error("RamulatorRAM: ECC plugin not ready (use_ecc=true but ECC plugin missing)");
 }
 
 // ── 同步 DRAM 操作 ────────────────────────────────────────────────────────────
@@ -84,7 +87,8 @@ RAMReadResult RamulatorRAM::read(uint64_t page_id, double /*current_time*/) {
     if (ssd_ && !was_hit) {
         std::vector<uint8_t> from_ssd;
         ssd_->read(static_cast<uint32_t>(page_id), from_ssd);
-        ecc_write(addr, from_ssd);   // 重建 ECC parity
+        if (use_ecc_) ecc_write(addr, from_ssd);   // 重建 ECC parity
+        else          dl_store(addr, from_ssd);     // 直接寫 DataLayer（無 ECC）
         do_write(addr);              // DDR4 Write timing（載入 DataLayer）
         if (capacity_pages_ > 0) {
             lru_touch(page_id);      // 先 touch 新頁
@@ -94,24 +98,27 @@ RAMReadResult RamulatorRAM::read(uint64_t page_id, double /*current_time*/) {
         lru_touch(page_id);          // 頁已在 DataLayer：更新 LRU 位置
     }
 
-    // 1. 送 DDR4 Read request（驅動 Ramulator2 timing，同時觸發 BitFlip pre_schedule）
+    // 1. 送 DDR4 Read request（驅動 Ramulator2 timing）
     Clk_t depart = do_read(addr);
 
-    // 2. 透過 ECC plugin 讀出（DataLayer → syndrome decode → 自動修正）
-    uint64_t ce_before = ecc_total_ce();
-    uint64_t ue_before = ecc_total_ue();
-    auto corrected_data = ecc_read(addr);
-    int n_ce = static_cast<int>(ecc_total_ce() - ce_before);
-    int n_ue = static_cast<int>(ecc_total_ue() - ue_before);
-
+    // 2. 讀出資料（ECC 啟用：syndrome decode + 自動修正；停用：raw DataLayer）
     RAMReadResult result;
-    result.data        = std::move(corrected_data);
-    result.hit         = was_hit;
-    result.latency     = static_cast<double>(depart) * static_cast<double>(tCK_ns_) * 1e-9;
-    result.n_corrected = n_ce;
-    result.n_ecc_ue    = n_ue;
-    result.n_silent    = 0;   // SECDED 不模擬 miscorrection（3-bit → 視為 CE）
-    result.phys        = {0, static_cast<uint32_t>(page_id % (1u << 20))};
+    result.latency  = static_cast<double>(depart) * static_cast<double>(tCK_ns_) * 1e-9;
+    result.hit      = was_hit;
+    result.phys     = {0, static_cast<uint32_t>(page_id % (1u << 20))};
+    result.n_silent = 0;
+
+    if (use_ecc_) {
+        uint64_t ce_before = ecc_total_ce();
+        uint64_t ue_before = ecc_total_ue();
+        result.data        = ecc_read(addr);
+        result.n_corrected = static_cast<int>(ecc_total_ce() - ce_before);
+        result.n_ecc_ue    = static_cast<int>(ecc_total_ue() - ue_before);
+    } else {
+        result.data        = dl_load(addr);   // 翻轉後的 raw data 直接穿透
+        result.n_corrected = 0;
+        result.n_ecc_ue    = 0;
+    }
     return result;
 }
 
@@ -119,7 +126,8 @@ void RamulatorRAM::write(uint64_t page_id, const std::vector<uint8_t>& data,
                           double /*current_time*/) {
     uint64_t addr = page_addr(page_id);
     if (ssd_) ssd_->write(static_cast<uint32_t>(page_id), data);  // write-through
-    ecc_write(addr, data);   // DataLayer 儲存 + ECC chip 計算 parity
+    if (use_ecc_) ecc_write(addr, data);   // DataLayer 儲存 + ECC chip 計算 parity
+    else          dl_store(addr, data);    // 直接寫 DataLayer（無 ECC）
     do_write(addr);          // DDR4 Write timing
     if (ssd_ && capacity_pages_ > 0) {
         lru_touch(page_id);
@@ -148,8 +156,13 @@ bool RamulatorRAM::is_in_ram(uint64_t page_id) const {
 
 void RamulatorRAM::inject_random_flip(uint64_t page_id) {
     // 只翻在 DataLayer 的頁（已逐出到 SSD 的頁不在 DRAM 中）
-    if (dl_has_page(page_addr(page_id)))
-        dl_random_flip(page_addr(page_id));
+    // dl_random_flip(rand_val) 以 rand_val 為亂數選隨機頁面，不是以 page_addr 為輸入；
+    // 此處改用 dl_flip_bit 精確指定目標頁面的隨機 bit 位置。
+    uint64_t addr = page_addr(page_id);
+    if (!dl_has_page(addr)) return;
+    int byte_pos = static_cast<int>(rng_() % PAGE_SIZE);
+    int bit_pos  = static_cast<int>(rng_() % 8);
+    dl_flip_bit(addr, byte_pos, bit_pos);
 }
 
 }  // namespace Ramulator

@@ -19,6 +19,7 @@
 #pragma once
 #include <cstdint>
 #include <list>
+#include <random>
 #include <unordered_map>
 #include <vector>
 
@@ -40,13 +41,17 @@ namespace Ramulator {
 class RamulatorRAM : public IRAM {
 public:
     // mem 必須已完成 connect_frontend() / connect_memory_system()
-    // 對應 YAML 中需同時載入 DataLayer + ECC plugin
+    // 對應 YAML 中需同時載入 DataLayer plugin；use_ecc=true 時還需 ECC plugin。
     //
     // ssd（可 nullptr）: write-through 後端 + crash_rescue 乾淨副本來源。
     // capacity_pages（0 = 無上限）: DataLayer 頁數上限；超過時 LRU 逐出到 SSD。
+    // use_ecc（預設 true）: 是否透過 ECC plugin 讀寫（true）或直接走 DataLayer
+    //   raw read/write（false）。false 時 flip 可直接穿透到 GuardedRAM，
+    //   行為更接近 ram 後端（無硬體 ECC 保護），適合 E1–E4 的 vulnerability 量測。
     explicit RamulatorRAM(IMemorySystem* mem,
                           SSD*     ssd            = nullptr,
-                          uint64_t capacity_pages = 0);
+                          uint64_t capacity_pages = 0,
+                          bool     use_ecc        = true);
 
     // ── IRAM 介面 ─────────────────────────────────────────────────
     RAMReadResult read(uint64_t page_id, double current_time) override;
@@ -73,6 +78,8 @@ private:
     float    tCK_ns_;
     int      tx_bytes_;
     uint64_t next_page_id_ = 0;
+    bool     use_ecc_      = true;  // 是否透過 ECC plugin 讀寫
+    std::mt19937 rng_;              // inject_random_flip 用（選 byte/bit 位置）
 
     // SSD 後端（可 nullptr）
     SSD*     ssd_            = nullptr;
