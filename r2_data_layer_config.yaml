@@ -64,4 +64,4 @@ memory_system:
       controller_plugins:
         - impl: DataLayer
           page_size: 4096
-          debug: true
+          debug: false

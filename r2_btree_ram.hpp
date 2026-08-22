@@ -95,6 +95,9 @@ private:
     std::list<uint64_t>                                        lru_order_;
     std::unordered_map<uint64_t, std::list<uint64_t>::iterator> lru_map_;
 
+    // !use_ecc_ 時的資料真實來源（DataLayer 的 staging 不保證與 dl_load 一致）
+    std::unordered_map<uint64_t, std::vector<uint8_t>> page_data_;
+
     static constexpr uint32_t PAGE_SIZE = 4096;
 
     uint64_t page_addr(uint64_t page_id) const {

@@ -74,6 +74,7 @@ void RamulatorRAM::maybe_evict() {
         uint64_t victim = lru_order_.back();
         lru_order_.pop_back();
         lru_map_.erase(victim);
+        if (!use_ecc_) page_data_.erase(victim);
         dl_erase(page_addr(victim));   // 從 DataLayer 移除；SSD 仍有副本
     }
 }
@@ -84,14 +85,17 @@ RAMReadResult RamulatorRAM::read(uint64_t page_id, double /*current_time*/) {
     uint64_t addr = page_addr(page_id);
 
     // SSD reload：頁被 LRU 逐出後不在 RAM → 從 SSD 重載
-    bool was_hit = dl_has_page(addr);
+    // use_ecc_=true：以 dl_has_page 判斷；use_ecc_=false：以 page_data_ 判斷
+    bool was_hit = use_ecc_ ? dl_has_page(addr)
+                            : (page_data_.count(page_id) > 0);
     if (ssd_ && !was_hit) {
         std::vector<uint8_t> from_ssd;
         ssd_->read(static_cast<uint32_t>(page_id), from_ssd);
         if (use_ecc_) {
-            ecc_write(addr, from_ssd);   // 重建 ECC parity
+            ecc_write(addr, from_ssd);       // 重建 ECC parity
         } else {
-            dl_store(addr, from_ssd);    // DataLayer 作為資料來源
+            page_data_[page_id] = from_ssd;  // 真實來源
+            dl_store(addr, from_ssd);         // 讓 DataLayer plugin 不 throw
         }
         do_write(addr);
         if (capacity_pages_ > 0) {
@@ -118,7 +122,7 @@ RAMReadResult RamulatorRAM::read(uint64_t page_id, double /*current_time*/) {
         result.n_corrected = static_cast<int>(ecc_total_ce() - ce_before);
         result.n_ecc_ue    = static_cast<int>(ecc_total_ue() - ue_before);
     } else {
-        result.data        = dl_load(addr);
+        result.data        = page_data_[page_id];  // 唯一真實來源，不用 dl_load
         result.n_corrected = 0;
         result.n_ecc_ue    = 0;
     }
@@ -130,11 +134,12 @@ void RamulatorRAM::write(uint64_t page_id, const std::vector<uint8_t>& data,
     uint64_t addr = page_addr(page_id);
     if (ssd_) ssd_->write(static_cast<uint32_t>(page_id), data);  // write-through
     if (use_ecc_) {
-        ecc_write(addr, data);   // DataLayer + ECC chip parity
+        ecc_write(addr, data);         // DataLayer + ECC chip parity
     } else {
-        dl_store(addr, data);    // DataLayer 作為資料來源
+        page_data_[page_id] = data;    // 真實來源
+        dl_store(addr, data);          // DataLayer staging（防 plugin throw）
     }
-    do_write(addr);              // DDR4 Write timing
+    do_write(addr);                    // DDR4 Write timing
     if (ssd_ && capacity_pages_ > 0) {
         lru_touch(page_id);
         maybe_evict();
@@ -153,21 +158,32 @@ void RamulatorRAM::free_page(uint64_t page_id) {
     uint64_t addr = page_addr(page_id);
     if (ssd_) ssd_->trim(static_cast<uint32_t>(page_id));
     if (ssd_ && capacity_pages_ > 0) lru_remove(page_id);
+    if (!use_ecc_) page_data_.erase(page_id);
     dl_erase(addr);
 }
 
 bool RamulatorRAM::is_in_ram(uint64_t page_id) const {
-    return dl_has_page(page_addr(page_id));
+    if (use_ecc_) return dl_has_page(page_addr(page_id));
+    return page_data_.count(page_id) > 0;
 }
 
 void RamulatorRAM::inject_random_flip(uint64_t page_id) {
-    uint64_t addr = page_addr(page_id);
-    if (!dl_has_page(addr)) return;
     int byte_pos = static_cast<int>(rng_() % PAGE_SIZE);
     int bit_pos  = static_cast<int>(rng_() % 8);
-    dl_flip_bit(addr, byte_pos, bit_pos);
-    // ECC 路徑：parity 未更新 → ecc_read 可偵測
-    // no-ECC 路徑：dl_load 直接讀回翻後的值
+
+    if (use_ecc_) {
+        // ECC 路徑：翻 DataLayer（parity 未更新 → ecc_read 可偵測並修正）
+        uint64_t addr = page_addr(page_id);
+        if (!dl_has_page(addr)) return;
+        dl_flip_bit(addr, byte_pos, bit_pos);
+    } else {
+        // no-ECC 路徑：翻 page_data_（真實來源），DataLayer 同步保持一致
+        auto it = page_data_.find(page_id);
+        if (it == page_data_.end()) return;
+        it->second[byte_pos] ^= static_cast<uint8_t>(1u << bit_pos);
+        uint64_t addr = page_addr(page_id);
+        if (dl_has_page(addr)) dl_flip_bit(addr, byte_pos, bit_pos);
+    }
 }
 
 // ── 空間故障注入（E3：row hammer / column fault）────────────────────────────
@@ -177,8 +193,8 @@ void RamulatorRAM::inject_random_flip(uint64_t page_id) {
 //   rows_per_bank = capacity_pages_ / DRAM_NUM_BANKS
 //   （capacity_pages_=0 時以已分配頁數 next_page_id_ 推算）
 //
-// 兩路徑均直接修改 DataLayer map；ECC parity 不更新 = 模擬 DRAM 位元翻轉。
-// ecc_read 可偵測（ECC 路徑）；dl_load 直接讀回翻後值（no-ECC 路徑）。
+// ECC 路徑：修改 DataLayer map（parity 不更新 → 模擬 DRAM 位元翻轉，ecc_read 可偵測）
+// no-ECC 路徑：修改 page_data_（真實來源），並同步 DataLayer staging
 
 static uint64_t r2_rows_per_bank(uint64_t capacity_pages, uint64_t next_page_id) {
     const uint64_t total = capacity_pages ? capacity_pages : next_page_id;
@@ -193,14 +209,25 @@ void RamulatorRAM::inject_row_error(uint32_t bank, uint32_t start_row,
     std::bernoulli_distribution flip_dist(flip_ratio);
 
     for (uint32_t r = start_row; r < start_row + 2 && (uint64_t)r < rpb; ++r) {
-        const uint64_t addr = page_addr((uint64_t)bank * rpb + r);
-        if (!dl_has_page(addr)) continue;
-        auto data = dl_load(addr);
-        for (auto& byte : data)
-            for (int b = 0; b < 8; ++b)
-                if (flip_dist(rng_))
-                    byte ^= static_cast<uint8_t>(1u << b);
-        dl_store(addr, data);  // ECC parity 未更新 = DRAM flip 語意
+        const uint64_t page_id = (uint64_t)bank * rpb + r;
+        const uint64_t addr    = page_addr(page_id);
+        if (use_ecc_) {
+            if (!dl_has_page(addr)) continue;
+            auto data = dl_load(addr);                 // copy
+            for (auto& byte : data)
+                for (int b = 0; b < 8; ++b)
+                    if (flip_dist(rng_))
+                        byte ^= static_cast<uint8_t>(1u << b);
+            dl_store(addr, data);                      // parity 未更新 = DRAM flip 語意
+        } else {
+            auto it = page_data_.find(page_id);
+            if (it == page_data_.end()) continue;
+            for (auto& byte : it->second)
+                for (int b = 0; b < 8; ++b)
+                    if (flip_dist(rng_))
+                        byte ^= static_cast<uint8_t>(1u << b);
+            if (dl_has_page(addr)) dl_store(addr, it->second);  // 同步 DataLayer staging
+        }
     }
 }
 
@@ -212,9 +239,17 @@ void RamulatorRAM::inject_column_error(uint32_t bank, uint32_t start_row,
     const uint64_t end_row = std::min((uint64_t)start_row + num_rows, rpb);
 
     for (uint64_t r = start_row; r < end_row; ++r) {
-        const uint64_t addr = page_addr((uint64_t)bank * rpb + r);
-        if (!dl_has_page(addr)) continue;
-        dl_flip_bit(addr, (int)col_byte, (int)bit);  // ECC parity 未更新 = DRAM flip 語意
+        const uint64_t page_id = (uint64_t)bank * rpb + r;
+        const uint64_t addr    = page_addr(page_id);
+        if (use_ecc_) {
+            if (!dl_has_page(addr)) continue;
+            dl_flip_bit(addr, (int)col_byte, (int)bit);  // parity 未更新 = DRAM flip 語意
+        } else {
+            auto it = page_data_.find(page_id);
+            if (it == page_data_.end()) continue;
+            it->second[col_byte] ^= static_cast<uint8_t>(1u << bit);
+            if (dl_has_page(addr)) dl_store(addr, it->second);
+        }
     }
 }
 
