@@ -66,7 +66,13 @@ public:
     bool is_in_ram(uint64_t page_id) const override;
     // 隨機翻一個 bit（透過 DataLayer API）
     void inject_random_flip(uint64_t page_id) override;
-    // inject_row_error / inject_column_error 用 IRAM 預設空實作
+    // 模擬 row hammer：連續 2 row 內以 flip_ratio 機率翻 bit
+    void inject_row_error(uint32_t bank, uint32_t start_row,
+                          double flip_ratio = 0.5) override;
+    // 模擬 column（bit line）故障：連續 num_rows 個 row 各翻 (col_byte, bit)
+    void inject_column_error(uint32_t bank, uint32_t start_row,
+                              uint32_t col_byte, uint8_t bit,
+                              uint32_t num_rows = 512) override;
 
     // ── 查詢 ──────────────────────────────────────────────────────
     float    tCK_ns()    const { return tCK_ns_; }
