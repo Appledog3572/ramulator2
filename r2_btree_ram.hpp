@@ -61,6 +61,19 @@ public:
     uint64_t      allocate(double current_time) override;
     void          free_page(uint64_t page_id)   override;
 
+    // 推進模擬時鐘（TTL 判定需要；ram 後端由 RAM::advance_time 提供）
+    void advance_time(double dt) override { current_time_ += dt; }
+
+    // ── TTL（ttl_theta_experiment）────────────────────────────────
+    // 政策持久化：綁 page_id 而非物理格，逐出重載後自動套回。
+    // ttl_seconds = +inf → 取消 TTL（hot page）。
+    void   set_ttl(uint64_t page_id, double ttl_seconds) override;
+    // 曝露窗 T_reload：自上次載入至今的駐留時間
+    double residency(uint64_t page_id, double now) const override;
+
+    // ── 統計 ──────────────────────────────────────────────────────
+    RAMStats get_stats() const override { return stats_; }
+
     // ── IRAM 擴充（GuardedRAM / FaultInjector 使用）──────────────────
     // DataLayer 有此頁資料 → 視為 in RAM
     bool is_in_ram(uint64_t page_id) const override;
@@ -94,6 +107,22 @@ private:
     // LRU 追蹤（僅 ssd_ != nullptr 且 capacity_pages_ > 0 時有效）
     std::list<uint64_t>                                        lru_order_;
     std::unordered_map<uint64_t, std::list<uint64_t>::iterator> lru_map_;
+
+    // ── TTL 與時鐘 ────────────────────────────────────────────────
+    double   current_time_ = 0.0;              // 由 advance_time() 推進
+    bool     ttl_residency_ = true;            // r2 一律用 residency 語意
+    std::unordered_map<uint64_t, double> ttl_policy_;   // page_id → ttl_seconds（持久）
+    std::unordered_map<uint64_t, double> load_time_;    // page_id → 載入時刻
+    std::unordered_map<uint64_t, double> last_access_;  // page_id → 最後存取時刻
+
+    RAMStats stats_{};                         // 與 ram 後端同格式的統計
+
+    // TTL 懶惰檢查：已過期則逐出並回傳 true
+    bool check_ttl(uint64_t page_id, double t);
+    // 逐出單一頁（TTL 與 LRU 共用）
+    void evict_page(uint64_t page_id);
+    // 載入／寫入後記錄時間戳
+    void note_load(uint64_t page_id, double t);
 
     // !use_ecc_ 時的資料真實來源（DataLayer 的 staging 不保證與 dl_load 一致）
     std::unordered_map<uint64_t, std::vector<uint8_t>> page_data_;

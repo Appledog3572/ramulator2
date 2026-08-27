@@ -3,6 +3,7 @@
 #include "r2_btree_ram.hpp"
 #include "SSD_core/ssd.hpp"
 #include <algorithm>
+#include <cmath>       // std::isinf（TTL 政策）
 #include <stdexcept>
 
 namespace Ramulator {
@@ -76,18 +77,79 @@ void RamulatorRAM::maybe_evict() {
         lru_map_.erase(victim);
         if (!use_ecc_) page_data_.erase(victim);
         dl_erase(page_addr(victim));   // 從 DataLayer 移除；SSD 仍有副本
+        load_time_.erase(victim);
+        last_access_.erase(victim);
+        stats_.n_lru_evictions++;
     }
+}
+
+// ── TTL ──────────────────────────────────────────────────────────────────────
+//
+// 語意與 ram 後端（RAM::check_ttl，config_.ttl_residency=true）一致：
+//   residency 到期判定 —— t − load_time > ttl 即逐出，不論讀取頻率。
+//   政策持久化 —— ttl_policy_ 綁 page_id，逐出重載後自動生效。
+
+void RamulatorRAM::evict_page(uint64_t page_id) {
+    const uint64_t addr = page_addr(page_id);
+    if (!use_ecc_) page_data_.erase(page_id);
+    dl_erase(addr);                 // 從 DataLayer 移除；SSD 仍有乾淨副本
+    lru_remove(page_id);
+    load_time_.erase(page_id);
+    last_access_.erase(page_id);
+}
+
+bool RamulatorRAM::check_ttl(uint64_t page_id, double t) {
+    auto pit = ttl_policy_.find(page_id);
+    if (pit == ttl_policy_.end()) return false;          // 非 cold page
+    const double ttl = pit->second;
+    if (std::isinf(ttl)) return false;
+
+    const auto& base_map = ttl_residency_ ? load_time_ : last_access_;
+    auto bit = base_map.find(page_id);
+    if (bit == base_map.end()) return false;             // 不在 RAM
+
+    if ((t - bit->second) <= ttl) return false;          // 未到期
+
+    evict_page(page_id);
+    stats_.n_ttl_evictions++;
+    return true;
+}
+
+void RamulatorRAM::note_load(uint64_t page_id, double t) {
+    load_time_[page_id]   = t;   // 曝露窗 T_reload 歸零
+    last_access_[page_id] = t;
+}
+
+void RamulatorRAM::set_ttl(uint64_t page_id, double ttl_seconds) {
+    if (std::isinf(ttl_seconds)) ttl_policy_.erase(page_id);
+    else                         ttl_policy_[page_id] = ttl_seconds;
+    // 無需立即套用：check_ttl 每次讀取時直接查 ttl_policy_，
+    // 因此政策天然是持久的（不像 ram 後端把狀態存在 slot 裡）。
+}
+
+double RamulatorRAM::residency(uint64_t page_id, double now) const {
+    auto it = load_time_.find(page_id);
+    if (it == load_time_.end()) return 0.0;
+    return (now > it->second) ? (now - it->second) : 0.0;
 }
 
 // ── IRAM 介面實作 ─────────────────────────────────────────────────────────────
 
-RAMReadResult RamulatorRAM::read(uint64_t page_id, double /*current_time*/) {
+RAMReadResult RamulatorRAM::read(uint64_t page_id, double current_time) {
     uint64_t addr = page_addr(page_id);
+    if (current_time > current_time_) current_time_ = current_time;
+    stats_.n_reads++;
 
     // SSD reload：頁被 LRU 逐出後不在 RAM → 從 SSD 重載
     // use_ecc_=true：以 dl_has_page 判斷；use_ecc_=false：以 page_data_ 判斷
     bool was_hit = use_ecc_ ? dl_has_page(addr)
                             : (page_data_.count(page_id) > 0);
+
+    // TTL 懶惰檢查（先於 hit 判定）：過期即逐出，本次讀取降級為 miss，
+    // 從 SSD 取回乾淨副本 —— 這就是 TTL 的「重載即修復」語意。
+    // 僅在有 SSD 後端時啟用：無後端時逐出等於直接遺失資料。
+    if (ssd_ && was_hit && check_ttl(page_id, current_time)) was_hit = false;
+
     if (ssd_ && !was_hit) {
         std::vector<uint8_t> from_ssd;
         ssd_->read(static_cast<uint32_t>(page_id), from_ssd);
@@ -98,12 +160,16 @@ RAMReadResult RamulatorRAM::read(uint64_t page_id, double /*current_time*/) {
             dl_store(addr, from_ssd);         // 讓 DataLayer plugin 不 throw
         }
         do_write(addr);
+        note_load(page_id, current_time);    // 曝露窗歸零
+        stats_.n_misses++;
         if (capacity_pages_ > 0) {
             lru_touch(page_id);
             maybe_evict();
         }
-    } else if (ssd_ && capacity_pages_ > 0) {
-        lru_touch(page_id);
+    } else if (was_hit) {
+        stats_.n_hits++;
+        last_access_[page_id] = current_time;
+        if (ssd_ && capacity_pages_ > 0) lru_touch(page_id);
     }
 
     // DDR4 Read timing
@@ -130,8 +196,11 @@ RAMReadResult RamulatorRAM::read(uint64_t page_id, double /*current_time*/) {
 }
 
 void RamulatorRAM::write(uint64_t page_id, const std::vector<uint8_t>& data,
-                          double /*current_time*/) {
+                          double current_time) {
     uint64_t addr = page_addr(page_id);
+    if (current_time > current_time_) current_time_ = current_time;
+    stats_.n_writes++;
+
     if (ssd_) ssd_->write(static_cast<uint32_t>(page_id), data);  // write-through
     if (use_ecc_) {
         ecc_write(addr, data);         // DataLayer + ECC chip parity
@@ -140,6 +209,8 @@ void RamulatorRAM::write(uint64_t page_id, const std::vector<uint8_t>& data,
         dl_store(addr, data);          // DataLayer staging（防 plugin throw）
     }
     do_write(addr);                    // DDR4 Write timing
+    // 寫入即刷新：資料與 SSD 一致，累積的 flip 已被覆蓋 → 曝露窗歸零
+    note_load(page_id, current_time);
     if (ssd_ && capacity_pages_ > 0) {
         lru_touch(page_id);
         maybe_evict();
@@ -151,6 +222,7 @@ uint64_t RamulatorRAM::allocate(double current_time) {
     // 初始化零頁並寫進 DataLayer + ECC chip（write() 同時寫 SSD）
     std::vector<uint8_t> zeros(PAGE_SIZE, 0);
     write(page_id, zeros, current_time);
+    stats_.n_allocations++;
     return page_id;
 }
 
@@ -160,6 +232,9 @@ void RamulatorRAM::free_page(uint64_t page_id) {
     if (ssd_ && capacity_pages_ > 0) lru_remove(page_id);
     if (!use_ecc_) page_data_.erase(page_id);
     dl_erase(addr);
+    load_time_.erase(page_id);
+    last_access_.erase(page_id);
+    ttl_policy_.erase(page_id);   // 頁面釋放 → 政策一併移除，避免 page_id 重用時誤套
 }
 
 bool RamulatorRAM::is_in_ram(uint64_t page_id) const {
