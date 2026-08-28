@@ -48,10 +48,16 @@ public:
     // use_ecc（預設 true）: 是否透過 ECC plugin 讀寫（true）或直接走 DataLayer
     //   raw read/write（false）。false 時 flip 可直接穿透到 GuardedRAM，
     //   行為更接近 ram 後端（無硬體 ECC 保護），適合 E1–E4 的 vulnerability 量測。
+    //
+    // seed：inject_random_flip 選 byte/bit 位置用的 RNG 種子。
+    //   ⚠️ 必須明確給定。舊版以物件記憶體位址推導，受 ASLR 影響導致
+    //      **同組參數每次執行結果都不同**（Batch 2 實測 fn 差異達 3.5%）。
+    //      呼叫端請傳入實驗的 seed，確保可重現。
     explicit RamulatorRAM(IMemorySystem* mem,
                           SSD*     ssd            = nullptr,
                           uint64_t capacity_pages = 0,
-                          bool     use_ecc        = true);
+                          bool     use_ecc        = true,
+                          uint32_t seed           = 42);
 
     // ── IRAM 介面 ─────────────────────────────────────────────────
     RAMReadResult read(uint64_t page_id, double current_time) override;

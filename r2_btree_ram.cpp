@@ -11,12 +11,18 @@ namespace Ramulator {
 // ── 建構 ─────────────────────────────────────────────────────────────────────
 
 RamulatorRAM::RamulatorRAM(IMemorySystem* mem, SSD* ssd, uint64_t capacity_pages,
-                           bool use_ecc)
+                           bool use_ecc, uint32_t seed)
     : mem_(mem),
       tCK_ns_(mem->get_tCK()),
       tx_bytes_(mem->get_tx_bytes()),
       use_ecc_(use_ecc),
-      rng_(reinterpret_cast<uintptr_t>(mem) ^ 0xdeadbeef9876543ull),
+      // ⚠️ 舊版用 reinterpret_cast<uintptr_t>(mem) 當種子 —— 那是物件的記憶體位址，
+      //    受 ASLR 影響，**同一組參數每次執行都會得到不同結果**。
+      //    rng_ 決定 inject_random_flip 的 byte/bit 位置，因此整個損毀樣態不可重現。
+      //    實測（Batch 2 B2-6）：同 seed 連跑兩次 fn = 5450 / 5265、
+      //    n_wrong_total = 198 / 2，差異極大。
+      //    改為由呼叫端明確給定種子。
+      rng_(seed ^ 0xdeadbeefu),
       ssd_(ssd),
       capacity_pages_(capacity_pages)
 {
