@@ -76,6 +76,8 @@ public:
     void   set_ttl(uint64_t page_id, double ttl_seconds) override;
     // 曝露窗 T_reload：自上次載入至今的駐留時間
     double residency(uint64_t page_id, double now) const override;
+    // 主動逐出（積極 TTL 用）；計入 n_ttl_evictions
+    bool   evict(uint64_t page_id) override;
 
     // ── 統計 ──────────────────────────────────────────────────────
     RAMStats get_stats() const override { return stats_; }

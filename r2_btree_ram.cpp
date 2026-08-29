@@ -139,6 +139,17 @@ double RamulatorRAM::residency(uint64_t page_id, double now) const {
     return (now > it->second) ? (now - it->second) : 0.0;
 }
 
+// 主動逐出（積極 TTL 用）。與 check_ttl 的逐出路徑相同，
+// 差別只在不檢查到期條件 —— 由呼叫端負責判斷。
+bool RamulatorRAM::evict(uint64_t page_id) {
+    const bool resident = use_ecc_ ? dl_has_page(page_addr(page_id))
+                                   : (page_data_.count(page_id) > 0);
+    if (!resident) return false;
+    evict_page(page_id);
+    stats_.n_ttl_evictions++;
+    return true;
+}
+
 // ── IRAM 介面實作 ─────────────────────────────────────────────────────────────
 
 RAMReadResult RamulatorRAM::read(uint64_t page_id, double current_time) {
