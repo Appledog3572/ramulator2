@@ -139,6 +139,52 @@ double RamulatorRAM::residency(uint64_t page_id, double now) const {
     return (now > it->second) ? (now - it->second) : 0.0;
 }
 
+// ── 指定位置的注入（FaultModel 用）──────────────────────────────────────────
+//
+// 與 inject_random_flip 相同的兩條路徑：
+//   use_ecc_  → 改 DataLayer（parity 未更新 → ecc_read 可偵測）
+//   !use_ecc_ → 改 page_data_（真實來源），並同步 DataLayer staging
+
+bool RamulatorRAM::flip_bit(uint64_t page_id, uint32_t byte, uint8_t bit) {
+    if (byte >= PAGE_SIZE || bit >= 8) return false;
+    const uint64_t addr = page_addr(page_id);
+
+    if (use_ecc_) {
+        if (!dl_has_page(addr)) return false;
+        dl_flip_bit(addr, (int)byte, (int)bit);
+        return true;
+    }
+    auto it = page_data_.find(page_id);
+    if (it == page_data_.end() || it->second.size() <= byte) return false;
+    it->second[byte] ^= static_cast<uint8_t>(1u << bit);
+    if (dl_has_page(addr)) dl_flip_bit(addr, (int)byte, (int)bit);
+    return true;
+}
+
+bool RamulatorRAM::force_bit(uint64_t page_id, uint32_t byte, uint8_t bit, bool value) {
+    if (byte >= PAGE_SIZE || bit >= 8) return false;
+    const uint64_t addr = page_addr(page_id);
+    const uint8_t  mask = static_cast<uint8_t>(1u << bit);
+
+    if (use_ecc_) {
+        if (!dl_has_page(addr)) return false;
+        auto data = dl_load(addr);                       // copy
+        if (data.size() <= byte) return false;
+        const bool cur = (data[byte] & mask) != 0;
+        if (cur == value) return false;                  // 已是卡住的值
+        dl_flip_bit(addr, (int)byte, (int)bit);          // 差一個 bit → 翻過去即可
+        return true;
+    }
+    auto it = page_data_.find(page_id);
+    if (it == page_data_.end() || it->second.size() <= byte) return false;
+    const bool cur = (it->second[byte] & mask) != 0;
+    if (cur == value) return false;
+    if (value) it->second[byte] |=  mask;
+    else       it->second[byte] &= static_cast<uint8_t>(~mask);
+    if (dl_has_page(addr)) dl_flip_bit(addr, (int)byte, (int)bit);
+    return true;
+}
+
 // 主動逐出（積極 TTL 用）。與 check_ttl 的逐出路徑相同，
 // 差別只在不檢查到期條件 —— 由呼叫端負責判斷。
 bool RamulatorRAM::evict(uint64_t page_id) {

@@ -79,6 +79,12 @@ public:
     // 主動逐出（積極 TTL 用）；計入 n_ttl_evictions
     bool   evict(uint64_t page_id) override;
 
+    // 指定位置的注入（FaultModel 用）
+    //   flip_bit ：XOR，transient
+    //   force_bit：釘死為指定值，permanent（stuck-at）
+    bool   flip_bit (uint64_t page_id, uint32_t byte, uint8_t bit) override;
+    bool   force_bit(uint64_t page_id, uint32_t byte, uint8_t bit, bool value) override;
+
     // ── 統計 ──────────────────────────────────────────────────────
     RAMStats get_stats() const override { return stats_; }
 
