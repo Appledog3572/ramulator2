@@ -7,6 +7,7 @@
 #   ./r2_build_test.sh --no-cmake   # 跳過 cmake（libramulator 已建置）
 #   ./r2_build_test.sh --only dl    # 只跑 DataLayer 測試
 #   ./r2_build_test.sh --only bf    # 只跑 BitFlip 測試
+#   ./r2_build_test.sh --only ttl   # 只重新產生 ttl_theta_experiment 的 YAML
 set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -53,6 +54,16 @@ if [[ -z "$ONLY" || "$ONLY" == "btree" ]]; then
   PYTHONPATH="$SCRIPT_DIR/python" python3 -m ramulator export \
       "$SCRIPT_DIR/r2_btree_config.py" \
       -o "$SCRIPT_DIR/r2_btree_config.yaml"
+fi
+
+# v2/ttl_theta_experiment 用的組態（DataLayer + ECC，兩者 debug 皆關）。
+# 沒有對應的測試程式，但一定要 export —— 否則 ttl_theta_experiment 的
+# A4/A5 臂會找不到 ECC plugin 而在建構子直接 throw。
+if [[ -z "$ONLY" || "$ONLY" == "ttl" ]]; then
+  echo "=== [0] export r2_ttl_config.yaml ==="
+  PYTHONPATH="$SCRIPT_DIR/python" python3 -m ramulator export \
+      "$SCRIPT_DIR/r2_ttl_config.py" \
+      -o "$SCRIPT_DIR/r2_ttl_config.yaml"
 fi
 
 # ── 步驟 1：cmake build ───────────────────────────────────────────────────────

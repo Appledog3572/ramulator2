@@ -1,14 +1,3 @@
-# r2_ttl_config.yaml — ttl_theta_experiment 專用的 Ramulator2 組態
-#
-# 與 r2_data_layer_config.yaml 的唯一差別：**多載入 ECC plugin**。
-# 另存新檔而不是直接改原檔，是為了不動到組員 E1–E4 既有的執行環境。
-#
-# 為什麼需要：Step 7 的交叉驗證與 F16 都含 A4（ECC）臂，
-# 而原本的組態只有 DataLayer，跑到 ECC 臂就會拋
-#   `RamulatorRAM: ECC plugin not ready (use_ecc=true but ECC plugin missing)`
-#
-# DDR4 時序與 org 全部沿用原檔，未做任何更動。
-
 frontend:
   impl: NullFrontend
 memory_system:
@@ -76,13 +65,5 @@ memory_system:
         - impl: DataLayer
           page_size: 4096
           debug: false
-        # ── ECC 晶片（SEC-DED）──────────────────────────────────────────────
-        # ttl_theta_experiment 的 A4 / A5 臂需要它：RamulatorRAM 的建構子在
-        # use_ecc=true 時會呼叫 ecc_is_ready()，plugin 不在就直接 throw。
-        #
-        # 加上它**不會影響非 ECC 的實驗臂**：ECCPlugin 只實作 init()/setup()，
-        # 沒有覆寫 IControllerPlugin 的 pre_schedule / on_issue / post_schedule，
-        # 完全不碰 DRAM 控制器的排程與時序，純粹是個由 ecc_read/ecc_write
-        # 明確驅動的旁路資料結構。而 use_ecc=false 時那兩個函式根本不會被呼叫。
         - impl: ECC
           debug: false
