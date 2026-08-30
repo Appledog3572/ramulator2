@@ -250,6 +250,18 @@ RAMReadResult RamulatorRAM::read(uint64_t page_id, double current_time) {
         result.data        = ecc_read(addr);
         result.n_corrected = static_cast<int>(ecc_total_ce() - ce_before);
         result.n_ecc_ue    = static_cast<int>(ecc_total_ue() - ue_before);
+
+        // ⚠️ 這兩行原本漏了。`result` 只把單次讀取的 CE/UE 交給呼叫端，
+        //    但 `get_stats()` 回傳的是 `stats_`，而 `stats_` 從來沒被更新
+        //    —— 導致 r2 後端的 `ecc_corrected` / `ecc_ue` 在 CSV 裡**恆為 0**。
+        //    ram 後端的 ECC_RAM::read() 一直都有做這件事，兩者因此對不起來：
+        //    F16 實測 ram 的 ecc_corrected 為 270/1249/4845/22006/64850，
+        //    r2 全部是 0，看起來像「ECC 在 r2 上沒作用」，其實只是沒記帳。
+        stats_.n_hw_corrected += static_cast<uint64_t>(result.n_corrected);
+        stats_.n_ecc_ue       += static_cast<uint64_t>(result.n_ecc_ue);
+        // 註：`n_hw_silent`（誤修正）在 r2 恆為 0 —— ECCPlugin 的
+        //     hamming_decode 只回傳 CE(1) / UE(2) 兩類，沒有 MISCORRECTED
+        //     這個分類，這是 r2 與 ram 之間真實存在的模型差異，不是 bug。
     } else {
         result.data        = page_data_[page_id];  // 唯一真實來源，不用 dl_load
         result.n_corrected = 0;
