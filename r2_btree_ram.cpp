@@ -329,7 +329,16 @@ void RamulatorRAM::write_back_page(uint64_t page_id) {
     // RAM 當下的內容（含 bit flip）；use_ecc 時經 ECC 解碼
     const std::vector<uint8_t> data = use_ecc_ ? ecc_read(page_addr(page_id))
                                                : page_data_[page_id];
-    ssd_->write(static_cast<uint32_t>(page_id), data);
+    // 大量寫回（flush、關閉）時 SSD 可能沒有空白頁：先 GC 再重寫；仍失敗就報錯，不能默默丟掉寫回
+    if (ssd_->write(static_cast<uint32_t>(page_id), data) != ssd_status::success) {
+        for (;;) {
+            const ssd_status g = ssd_->GC();
+            if (g == ssd_status::no_need_to_gc) break;
+            if (g != ssd_status::success) throw std::runtime_error("RamulatorRAM: SSD GC failed during write-back");
+        }
+        if (ssd_->write(static_cast<uint32_t>(page_id), data) != ssd_status::success)
+            throw std::runtime_error("RamulatorRAM: write-back to SSD failed");
+    }
     n_writebacks_++;
 }
 
