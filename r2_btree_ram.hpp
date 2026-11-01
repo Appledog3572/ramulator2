@@ -21,6 +21,7 @@
 #include <list>
 #include <random>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // V2 抽象介面（IRAM + RAMReadResult / DRAMAddress）
@@ -43,7 +44,8 @@ public:
     // mem 必須已完成 connect_frontend() / connect_memory_system()
     // 對應 YAML 中需同時載入 DataLayer plugin；use_ecc=true 時還需 ECC plugin。
     //
-    // ssd（可 nullptr）: write-through 後端 + crash_rescue 乾淨副本來源。
+    // ssd（可 nullptr）: SSD 後端 + crash_rescue 乾淨副本來源。
+    //   預設 write-through（寫入即同步寫 SSD）；set_write_back(true) 後改為 write-back。
     // capacity_pages（0 = 無上限）: DataLayer 頁數上限；超過時 LRU 逐出到 SSD。
     // use_ecc（預設 true）: 是否透過 ECC plugin 讀寫（true）或直接走 DataLayer
     //   raw read/write（false）。false 時 flip 可直接穿透到 GuardedRAM，
@@ -84,6 +86,21 @@ public:
     //   force_bit：釘死為指定值，permanent（stuck-at）
     bool   flip_bit (uint64_t page_id, uint32_t byte, uint8_t bit) override;
     bool   force_bit(uint64_t page_id, uint32_t byte, uint8_t bit, bool value) override;
+
+    // ── write-back（預設關閉 = write-through）──────────────────────
+    // 開啟後 write() 只更新 RAM 並標記 dirty，不寫 SSD；dirty 頁在逐出
+    // （LRU、TTL 到期、evict()）或 flush() 時，把 RAM 當下的內容寫回 SSD ——
+    // 包括其上的 bit flip（use_ecc 時先經 ECC 解碼，與真實記憶體控制器相同）。
+    // 只有 ssd_ != nullptr 時有作用。
+    void     set_write_back(bool on) { write_back_ = on; }
+    bool     write_back() const { return write_back_; }
+    bool     is_dirty(uint64_t page_id) const { return dirty_.count(page_id) > 0; }
+    uint64_t n_dirty() const { return dirty_.size(); }
+    // 依頁號順序寫回所有 dirty 頁（定期 flush、workload 結束時的最終寫回）。
+    // 固定順序：寫 SSD 會改變 FTL／GC 狀態，順序固定結果才可重現。
+    void     flush();
+    // 寫回次數（write-back 專用；不放進共用的 RAMStats，避免影響其他後端）
+    uint64_t n_writebacks() const { return n_writebacks_; }
 
     // ── 統計 ──────────────────────────────────────────────────────
     RAMStats get_stats() const override { return stats_; }
@@ -151,6 +168,14 @@ private:
     void   do_write(uint64_t addr);
     // 同步 Read：送 request 並等待 callback，回傳 depart−arrive cycles
     Clk_t  do_read (uint64_t addr);
+
+    // write-back 狀態
+    bool                         write_back_   = false;
+    std::unordered_set<uint64_t> dirty_;                // dirty 頁（RAM 內容 ≠ SSD）
+    uint64_t                     n_writebacks_ = 0;
+    // 若 page_id 是 dirty：把 RAM 當下的內容寫回 SSD 並清除 dirty。
+    // 必須在頁從 DataLayer 移除之前呼叫。
+    void write_back_page(uint64_t page_id);
 
     // LRU 輔助
     void lru_touch (uint64_t page_id);

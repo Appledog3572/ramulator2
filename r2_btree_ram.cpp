@@ -81,6 +81,7 @@ void RamulatorRAM::maybe_evict() {
         uint64_t victim = lru_order_.back();
         lru_order_.pop_back();
         lru_map_.erase(victim);
+        write_back_page(victim);       // write-back：dirty 頁先寫回（須在移除資料前）
         if (!use_ecc_) page_data_.erase(victim);
         dl_erase(page_addr(victim));   // 從 DataLayer 移除；SSD 仍有副本
         load_time_.erase(victim);
@@ -96,6 +97,7 @@ void RamulatorRAM::maybe_evict() {
 //   政策持久化 —— ttl_policy_ 綁 page_id，逐出重載後自動生效。
 
 void RamulatorRAM::evict_page(uint64_t page_id) {
+    write_back_page(page_id);       // write-back：dirty 頁先寫回（須在移除資料前）
     const uint64_t addr = page_addr(page_id);
     if (!use_ecc_) page_data_.erase(page_id);
     dl_erase(addr);                 // 從 DataLayer 移除；SSD 仍有乾淨副本
@@ -276,7 +278,10 @@ void RamulatorRAM::write(uint64_t page_id, const std::vector<uint8_t>& data,
     if (current_time > current_time_) current_time_ = current_time;
     stats_.n_writes++;
 
-    if (ssd_) ssd_->write(static_cast<uint32_t>(page_id), data);  // write-through
+    if (ssd_) {
+        if (write_back_) dirty_.insert(page_id);                       // write-back：逐出或 flush 時才寫
+        else             ssd_->write(static_cast<uint32_t>(page_id), data);  // write-through
+    }
     if (use_ecc_) {
         ecc_write(addr, data);         // DataLayer + ECC chip parity
     } else {
@@ -284,7 +289,8 @@ void RamulatorRAM::write(uint64_t page_id, const std::vector<uint8_t>& data,
         dl_store(addr, data);          // DataLayer staging（防 plugin throw）
     }
     do_write(addr);                    // DDR4 Write timing
-    // 寫入即刷新：資料與 SSD 一致，累積的 flip 已被覆蓋 → 曝露窗歸零
+    // 寫入即刷新：累積的 flip 已被新資料覆蓋 → 曝露窗歸零
+    //（write-through 時資料也與 SSD 一致；write-back 時要等寫回才一致）
     note_load(page_id, current_time);
     if (ssd_ && capacity_pages_ > 0) {
         lru_touch(page_id);
@@ -303,6 +309,7 @@ uint64_t RamulatorRAM::allocate(double current_time) {
 
 void RamulatorRAM::free_page(uint64_t page_id) {
     uint64_t addr = page_addr(page_id);
+    dirty_.erase(page_id);          // 頁面釋放：不寫回
     if (ssd_) ssd_->trim(static_cast<uint32_t>(page_id));
     if (ssd_ && capacity_pages_ > 0) lru_remove(page_id);
     if (!use_ecc_) page_data_.erase(page_id);
@@ -310,6 +317,26 @@ void RamulatorRAM::free_page(uint64_t page_id) {
     load_time_.erase(page_id);
     last_access_.erase(page_id);
     ttl_policy_.erase(page_id);   // 頁面釋放 → 政策一併移除，避免 page_id 重用時誤套
+}
+
+// ── write-back ───────────────────────────────────────────────────────────────
+
+void RamulatorRAM::write_back_page(uint64_t page_id) {
+    auto it = dirty_.find(page_id);
+    if (it == dirty_.end()) return;
+    dirty_.erase(it);
+    if (!ssd_) return;
+    // RAM 當下的內容（含 bit flip）；use_ecc 時經 ECC 解碼
+    const std::vector<uint8_t> data = use_ecc_ ? ecc_read(page_addr(page_id))
+                                               : page_data_[page_id];
+    ssd_->write(static_cast<uint32_t>(page_id), data);
+    n_writebacks_++;
+}
+
+void RamulatorRAM::flush() {
+    std::vector<uint64_t> pages(dirty_.begin(), dirty_.end());
+    std::sort(pages.begin(), pages.end());
+    for (uint64_t p : pages) write_back_page(p);
 }
 
 bool RamulatorRAM::is_in_ram(uint64_t page_id) const {
